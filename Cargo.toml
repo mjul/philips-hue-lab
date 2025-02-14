@@ -1,0 +1,8 @@
+[package]
+name = "philips_hue_lab"
+version = "0.1.0"
+edition = "2021"
+description = "Experimental CLI tools for Philips Hue ZigBee IoT devices."
+
+[dependencies]
+clap = { version = "4.1", features = ["derive"] }
