@@ -1,6 +1,7 @@
 use clap::{Arg, Command};
 use reqwest::blocking;
 use serde::{Deserialize, Serialize};
+use serde_json::Value;
 use std::error::Error;
 use std::fmt::{Display, Formatter};
 
@@ -22,6 +23,14 @@ struct BridgeKey {
     user_name: String,
     #[serde(rename = "clientkey")]
     client_key: String,
+}
+
+/// App key for the Hue API
+struct AppKey(String);
+impl From<&AppKey> for String {
+    fn from(key: &AppKey) -> Self {
+        key.0.clone()
+    }
 }
 
 #[derive(Debug)]
@@ -150,6 +159,29 @@ fn parse_api_response_errors(response: &serde_json::Value) -> Vec<HueApiErrorMes
     }
 }
 
+fn get_request(
+    bridge_ip: &BridgeIp,
+    app_key: &AppKey,
+    path: &str,
+) -> Result<serde_json::Value, Box<dyn Error>> {
+    let url = format!("https://{}{}", bridge_ip.0, path);
+    println!("Requesting: {}", url);
+    let cert = reqwest::Certificate::from_pem(HUE_ROOT_CA.as_bytes())?;
+    let client = blocking::ClientBuilder::new()
+        .add_root_certificate(cert)
+        // otherwise we get an error  "The certificate's CN name does not match the passed value."
+        .danger_accept_invalid_certs(true)
+        .build()?;
+    let response = client
+        .get(&url)
+        .header("Accept", "application/json")
+        .header("hue-application-key", String::from(app_key))
+        .send();
+    println!("Raw response: {:?}", response);
+    let result = response?.json::<serde_json::Value>()?;
+    Ok(result)
+}
+
 fn post_request<T>(
     bridge_ip: &BridgeIp,
     path: &str,
@@ -178,15 +210,88 @@ where
     Ok(result)
 }
 
-fn main() -> Result<(), Box<dyn Error>> {
-    let user_name_arg = Arg::new("user-name")
-        .help("User name for the Philips Hue API")
-        .long("user")
-        .required(true);
+/// Standard HUE device information.
+#[derive(Debug, Clone, PartialEq)]
+struct DeviceInfo {
+    id: String,
+    name: String,
+    product_name: String,
+}
 
-    let api_key_arg = Arg::new("api-key")
-        .help("API key for the Philips Hue API")
+#[derive(Debug, Clone, PartialEq)]
+struct LightDevice(DeviceInfo);
+#[derive(Debug, Clone, PartialEq)]
+struct BridgeDevice(DeviceInfo);
+#[derive(Debug, Clone, PartialEq)]
+struct SensorDevice(DeviceInfo);
+
+/// A Hue device on the bridge
+#[derive(Debug, Clone, PartialEq)]
+enum HueDevice {
+    Light(LightDevice),
+    Bridge(BridgeDevice),
+    Sensor(SensorDevice),
+}
+
+fn list_devices(bridge_ip: &BridgeIp, api_key: &AppKey) -> Result<Vec<HueDevice>, HueError> {
+    let response = get_request(&bridge_ip, &api_key, "/clip/v2/resource/device")
+        .map_err(|e| HueError(e.to_string(), Some(e)))?;
+    let parsed = parse_list_devices_response(&response)?;
+    Ok(parsed)
+}
+
+/// Hue API representation of a device (some of the information)
+#[derive(Deserialize, Debug)]
+struct HueApiDeviceResponse {
+    errors: Vec<HueApiErrorMessage>,
+    data: Vec<HueApiDeviceData>,
+}
+
+/// Hue API representation of a device (some of the information)
+#[derive(Deserialize, Debug)]
+struct HueApiDeviceData {
+    id: String,
+    product_data: HueApiDeviceProductData,
+    metadata: HueApiDeviceMetadata,
+}
+
+/// Hue API representation of device product data (some of the information)
+#[derive(Deserialize, Debug)]
+struct HueApiDeviceProductData {
+    model_id: String,
+    product_name: String,
+}
+/// Hue API representation of device metadata (some of the information)
+#[derive(Deserialize, Debug)]
+struct HueApiDeviceMetadata {
+    name: String,
+}
+
+fn parse_list_devices_response(json_response: &Value) -> Result<Vec<HueDevice>, HueError> {
+    let parsed: HueApiDeviceResponse =
+        serde_json::from_value::<HueApiDeviceResponse>(json_response.clone())
+            .map_err(|e| HueError(e.to_string(), Some(Box::new(e))))?;
+    match parsed.errors.is_empty() {
+        true => Ok(parsed
+            .data
+            .into_iter()
+            .map(|d| {
+                HueDevice::Light(LightDevice(DeviceInfo {
+                    id: d.id,
+                    name: d.metadata.name,
+                    product_name: d.product_data.product_name,
+                }))
+            })
+            .collect()),
+        false => Err(HueError(String::from("Response has errors"), None)),
+    }
+}
+
+fn main() -> Result<(), Box<dyn Error>> {
+    let app_key_arg = Arg::new("key")
+        .help("Application key for the Philips Hue API")
         .long("key")
+        .value_name("KEY")
         .required(true);
 
     let matches = Command::new("philips_hue_lab")
@@ -206,22 +311,37 @@ fn main() -> Result<(), Box<dyn Error>> {
         .subcommand(
             Command::new("list")
                 .about("List all devices on the Hue Bridge.")
-                .arg(user_name_arg.clone()) // Add shared arguments
-                .arg(api_key_arg.clone()),
+                .arg(app_key_arg.clone()),
         )
         .get_matches();
 
     if let Some(bridge_ip) = matches.get_one::<String>("bridge") {
         println!("Using Hue Bridge at: {}", bridge_ip);
-        let bridge = Some(BridgeIp(String::from(bridge_ip)));
+        let bridge = BridgeIp(String::from(bridge_ip));
         if let Some(_sub_matches) = matches.subcommand_matches("create-key") {
             println!("Requesting creation of a new application key on the Hue Bridge. Make sure you have pressed the link button on the bridge!");
-            let bridge_key = create_key(&bridge.unwrap())?;
+            let bridge_key = create_key(&bridge)?;
             println!("Key created: {:?}", bridge_key);
             Ok(())
-        } else if let Some(_sub_matches) = matches.subcommand_matches("list") {
+        } else if let Some(list_matches) = matches.subcommand_matches("list") {
+            let app_key = AppKey(String::from(
+                list_matches
+                    .get_one::<String>(app_key_arg.get_id().as_str())
+                    .unwrap(),
+            ));
             println!("Requesting list of devices on the Hue Bridge...");
-            // TODO: 
+            let devices = list_devices(&bridge, &app_key)?;
+            for device in devices {
+                let (di, dt) = match device {
+                    HueDevice::Bridge(BridgeDevice(device_info)) => (device_info, "bridge"),
+                    HueDevice::Sensor(SensorDevice(device_info)) => (device_info, "sensor"),
+                    HueDevice::Light(LightDevice(device_info)) => (device_info, "light"),
+                };
+                println!(
+                    "{:8} | {:36} | {:30} | {:20}",
+                    dt, di.id, di.name, di.product_name
+                );
+            }
             Ok(())
         } else {
             Err(Box::new(HueError(
@@ -240,6 +360,7 @@ fn main() -> Result<(), Box<dyn Error>> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::hint::assert_unchecked;
 
     #[test]
     fn parse_api_response_errors_when_error_is_present() {
@@ -301,5 +422,69 @@ mod tests {
             },
             actual.unwrap()
         );
+    }
+
+    #[test]
+    fn parse_list_devices_response_with_successful_operation() {
+        let response_body = serde_json::json!(
+            {"errors": [],
+             "data": [
+                {
+                  "id": "94860050-1d86-4b79-8583-1be7dce05197",
+                  "id_v1": "/lights/2",
+                  "product_data": {
+                    "model_id": "123455987123",
+                    "manufacturer_name": "Signify Netherlands B.V.",
+                    "product_name": "Space Light",
+                    "product_archetype": "foo_bar",
+                    "certified": true,
+                    "software_version": "1.1.2",
+                    "hardware_platform_type": "100b-118"
+                  },
+                  "metadata": {
+                    "name": "Space light 1",
+                    "archetype": "foo_bar"
+                  },
+                  "identify": {},
+                  "services": [
+                    {
+                      "rid": "7d5545be-626a-4d63-a2f4-4347e43b50f6",
+                      "rtype": "zigbee_connectivity"
+                    },
+                    {
+                      "rid": "53ca6e61-5e40-4760-9e2e-6d2f48594901",
+                      "rtype": "light"
+                    },
+                    {
+                      "rid": "5dbe9888-a0b7-42d4-b002-9f15cd77e419",
+                      "rtype": "entertainment"
+                    },
+                    {
+                      "rid": "7c12995f-03bc-4b31-bb55-9da9e075dc0f",
+                      "rtype": "taurus_7455"
+                    },
+                    {
+                      "rid": "5b275c9c-dd12-45a8-9d36-716c43c1d3ed",
+                      "rtype": "device_software_update"
+                    }
+                  ],
+                  "type": "device"
+                }
+                ]
+        }
+        );
+
+        let actual = parse_list_devices_response(&response_body);
+        assert_eq!(actual.is_ok(), true);
+        let ds = actual.unwrap();
+        assert_eq!(ds.len(), 1);
+        assert_eq!(
+            ds[0],
+            HueDevice::Light(LightDevice(DeviceInfo {
+                id: "94860050-1d86-4b79-8583-1be7dce05197".to_string(),
+                name: "Space light 1".to_string(),
+                product_name: "Space Light".to_string(),
+            }))
+        )
     }
 }
