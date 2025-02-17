@@ -1,7 +1,6 @@
 use clap::{Arg, Command};
 use reqwest::blocking;
 use serde::{Deserialize, Serialize};
-use serde_json::Value;
 use std::error::Error;
 use std::fmt::{Display, Formatter};
 
@@ -55,21 +54,60 @@ fn create_key(bridge_ip: &BridgeIp) -> Result<BridgeKey, HueError> {
     let body = CreateUserRequestBody::from(HUE_API_APP_NAME, HUE_API_USER_NAME);
     let response =
         post_request(&bridge_ip, "/api", &body).map_err(|e| HueError(e.to_string(), Some(e)))?;
+    let parsed = parse_create_key_response(&response)?;
+    Ok(BridgeKey {
+        user_name: HUE_API_USER_NAME.to_string(),
+        client_key: parsed.user_name,
+    })
+}
+
+fn parse_create_key_response(
+    response: &serde_json::Value,
+) -> Result<HueApiCreateKeySuccessDetails, HueError> {
     let errors = parse_api_response_errors(&response);
-    match errors.is_empty() {
-        true => {
-            let bridge_key = serde_json::from_value::<BridgeKey>(response)
-                .map_err(|e| HueError(e.to_string(), Some(Box::new(e))))?;
-            Ok(bridge_key)
-        }
-        false => {
+    match (errors.is_empty(), response.is_array()) {
+        (false, _) => {
             let inner: Option<Box<dyn Error>> = errors
                 .into_iter()
                 .next()
                 .map(|e| Box::new(e) as Box<dyn Error>);
             Err(HueError(String::from("Could not create key."), inner))
         }
+        (true, true) => {
+            let success_details = response
+                .as_array()
+                .unwrap()
+                .get(0)
+                .unwrap()
+                .as_object()
+                .unwrap()
+                .get("success");
+            match success_details {
+                None => Err(HueError(
+                    String::from(
+                        "Could not create key. success element not found in response array.",
+                    ),
+                    None,
+                )),
+                Some(details_json) => {
+                    let result = serde_json::from_value::<HueApiCreateKeySuccessDetails>(
+                        details_json.clone(),
+                    )
+                    .map_err(|e| HueError(e.to_string(), Some(Box::new(e))))?;
+                    Ok(result)
+                }
+            }
+        }
+        // We don't expect this to be reachable under normal operation
+        (_, _) => unimplemented!(),
     }
+}
+
+/// This is the API wire format of the Hue response for a successful create-key operation.
+#[derive(Deserialize, Debug, PartialEq)]
+struct HueApiCreateKeySuccessDetails {
+    #[serde(rename = "username")]
+    user_name: String,
 }
 
 /// This is the API wire format of the Hue Error message details.
@@ -229,5 +267,25 @@ mod tests {
         ]);
         let errors = parse_api_response_errors(&response_body);
         assert_eq!(errors.len(), 0);
+    }
+
+    #[test]
+    fn parse_create_key_response_with_successful_operation() {
+        let response_body = serde_json::json!(
+        [
+            {
+                "success": {
+                    "username": "1234567890"
+                }
+            }
+        ]);
+        let actual = parse_create_key_response(&response_body);
+        assert_eq!(actual.is_ok(), true);
+        assert_eq!(
+            HueApiCreateKeySuccessDetails {
+                user_name: "1234567890".to_string()
+            },
+            actual.unwrap()
+        );
     }
 }
