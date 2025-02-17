@@ -1,8 +1,8 @@
 use clap::{Arg, Command};
 use reqwest::blocking;
 use serde::{Deserialize, Serialize};
+use serde_json::Value;
 use std::error::Error;
-use std::io::ErrorKind::HostUnreachable;
 
 const HUE_API_APP_NAME: &str = "philips_hue_lab";
 const HUE_API_USER_NAME: &str = "hue_lab_user";
@@ -54,9 +54,43 @@ fn create_key(bridge_ip: &BridgeIp) -> Result<BridgeKey, HueError> {
     let body = CreateUserRequestBody::from(HUE_API_APP_NAME, HUE_API_USER_NAME);
     let response =
         post_request(&bridge_ip, "/api", &body).map_err(|e| HueError(e.to_string(), Some(e)))?;
+    let errors = parse_api_response_errors(&response);
+    println!("Errors: {:?}", errors);
     let bridge_key = serde_json::from_value::<BridgeKey>(response)
         .map_err(|e| HueError(e.to_string(), Some(Box::new(e))))?;
     Ok(bridge_key)
+}
+
+/// This is the API wire format of the Hue Error message details.
+#[derive(Deserialize, Debug, PartialEq)]
+struct HueApiErrorMessage {
+    #[serde(rename = "type")]
+    type_value: i64,
+    address: String,
+    description: String,
+}
+
+/// Parse and extract all API response errors.
+/// Returns an empty vec if there are no errors in the response.
+fn parse_api_response_errors(response: &serde_json::Value) -> Vec<HueApiErrorMessage> {
+    match response.is_array() {
+        true => response
+            .as_array()
+            .unwrap()
+            .iter()
+            .filter_map(
+                |element| match (element.is_object(), element.get("error")) {
+                    (true, Some(details)) => {
+                        let msg =
+                            serde_json::from_value::<HueApiErrorMessage>(details.clone()).unwrap();
+                        Some(msg)
+                    }
+                    _ => None,
+                },
+            )
+            .collect(),
+        false => vec![],
+    }
 }
 
 fn post_request<T>(
@@ -129,5 +163,38 @@ fn main() -> Result<(), Box<dyn Error>> {
             String::from("No subcommand provided. Please provide a subcommand."),
             None,
         )))
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn parse_api_response_errors_when_error_is_present() {
+        let response_body = serde_json::json!(
+        [
+            {
+                "error": {
+                    "type": 101,
+                    "address": "/",
+                    "description": "link button not pressed"
+                }
+            }
+        ]);
+        let errors = parse_api_response_errors(&response_body);
+
+        assert_eq!(errors.len(), 1);
+        assert_eq!(errors[0].type_value, 101);
+        assert_eq!(errors[0].address, "/");
+        assert_eq!(errors[0].description, "link button not pressed");
+        assert_eq!(
+            errors[0],
+            HueApiErrorMessage {
+                type_value: 101,
+                address: "/".to_string(),
+                description: "link button not pressed".to_string(),
+            }
+        );
     }
 }
