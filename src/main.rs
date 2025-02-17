@@ -3,6 +3,7 @@ use reqwest::blocking;
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 use std::error::Error;
+use std::fmt::{Display, Formatter};
 
 const HUE_API_APP_NAME: &str = "philips_hue_lab";
 const HUE_API_USER_NAME: &str = "hue_lab_user";
@@ -55,10 +56,20 @@ fn create_key(bridge_ip: &BridgeIp) -> Result<BridgeKey, HueError> {
     let response =
         post_request(&bridge_ip, "/api", &body).map_err(|e| HueError(e.to_string(), Some(e)))?;
     let errors = parse_api_response_errors(&response);
-    println!("Errors: {:?}", errors);
-    let bridge_key = serde_json::from_value::<BridgeKey>(response)
-        .map_err(|e| HueError(e.to_string(), Some(Box::new(e))))?;
-    Ok(bridge_key)
+    match errors.is_empty() {
+        true => {
+            let bridge_key = serde_json::from_value::<BridgeKey>(response)
+                .map_err(|e| HueError(e.to_string(), Some(Box::new(e))))?;
+            Ok(bridge_key)
+        }
+        false => {
+            let inner: Option<Box<dyn Error>> = errors
+                .into_iter()
+                .next()
+                .map(|e| Box::new(e) as Box<dyn Error>);
+            Err(HueError(String::from("Could not create key."), inner))
+        }
+    }
 }
 
 /// This is the API wire format of the Hue Error message details.
@@ -69,6 +80,14 @@ struct HueApiErrorMessage {
     address: String,
     description: String,
 }
+
+impl Display for HueApiErrorMessage {
+    fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
+        f.write_fmt(format_args!("{:?}", self))
+    }
+}
+
+impl Error for HueApiErrorMessage {}
 
 /// Parse and extract all API response errors.
 /// Returns an empty vec if there are no errors in the response.
@@ -196,5 +215,19 @@ mod tests {
                 description: "link button not pressed".to_string(),
             }
         );
+    }
+
+    #[test]
+    fn parse_api_response_errors_when_no_error_is_present() {
+        let response_body = serde_json::json!(
+        [
+            {
+                "success": {
+                    "username": "1234567890"
+                }
+            }
+        ]);
+        let errors = parse_api_response_errors(&response_body);
+        assert_eq!(errors.len(), 0);
     }
 }
