@@ -218,20 +218,9 @@ struct DeviceInfo {
     product_name: String,
 }
 
-#[derive(Debug, Clone, PartialEq)]
-struct LightDevice(DeviceInfo);
-#[derive(Debug, Clone, PartialEq)]
-struct BridgeDevice(DeviceInfo);
-#[derive(Debug, Clone, PartialEq)]
-struct SensorDevice(DeviceInfo);
-
 /// A Hue device on the bridge
 #[derive(Debug, Clone, PartialEq)]
-enum HueDevice {
-    Light(LightDevice),
-    Bridge(BridgeDevice),
-    Sensor(SensorDevice),
-}
+struct HueDevice(DeviceInfo);
 
 fn list_devices(bridge_ip: &BridgeIp, api_key: &AppKey) -> Result<Vec<HueDevice>, HueError> {
     let response = get_request(&bridge_ip, &api_key, "/clip/v2/resource/device")
@@ -276,11 +265,11 @@ fn parse_list_devices_response(json_response: &Value) -> Result<Vec<HueDevice>, 
             .data
             .into_iter()
             .map(|d| {
-                HueDevice::Light(LightDevice(DeviceInfo {
+                HueDevice(DeviceInfo {
                     id: d.id,
                     name: d.metadata.name,
                     product_name: d.product_data.product_name,
-                }))
+                })
             })
             .collect()),
         false => Err(HueError(String::from("Response has errors"), None)),
@@ -331,16 +320,8 @@ fn main() -> Result<(), Box<dyn Error>> {
             ));
             println!("Requesting list of devices on the Hue Bridge...");
             let devices = list_devices(&bridge, &app_key)?;
-            for device in devices {
-                let (di, dt) = match device {
-                    HueDevice::Bridge(BridgeDevice(device_info)) => (device_info, "bridge"),
-                    HueDevice::Sensor(SensorDevice(device_info)) => (device_info, "sensor"),
-                    HueDevice::Light(LightDevice(device_info)) => (device_info, "light"),
-                };
-                println!(
-                    "{:8} | {:36} | {:30} | {:20}",
-                    dt, di.id, di.name, di.product_name
-                );
+            for HueDevice(di) in devices {
+                println!("{:36} | {:30} | {:20}", di.id, di.name, di.product_name);
             }
             Ok(())
         } else {
@@ -360,7 +341,6 @@ fn main() -> Result<(), Box<dyn Error>> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use std::hint::assert_unchecked;
 
     #[test]
     fn parse_api_response_errors_when_error_is_present() {
@@ -425,7 +405,7 @@ mod tests {
     }
 
     #[test]
-    fn parse_list_devices_response_with_successful_operation() {
+    fn parse_list_devices_response_with_successful_operation_light_device() {
         let response_body = serde_json::json!(
             {"errors": [],
              "data": [
