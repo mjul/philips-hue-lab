@@ -179,6 +179,16 @@ where
 }
 
 fn main() -> Result<(), Box<dyn Error>> {
+    let user_name_arg = Arg::new("user-name")
+        .help("User name for the Philips Hue API")
+        .long("user")
+        .required(true);
+
+    let api_key_arg = Arg::new("api-key")
+        .help("API key for the Philips Hue API")
+        .long("key")
+        .required(true);
+
     let matches = Command::new("philips_hue_lab")
         .version(env!("CARGO_PKG_VERSION"))
         .about("Experimental CLI tools for Philips Hue ZigBee IoT devices.")
@@ -193,31 +203,35 @@ fn main() -> Result<(), Box<dyn Error>> {
             Command::new("create-key")
                 .about("Ask the Hue Bridge to generate an application key. Press the Link button on the bridge to authorize this operation.")
         )
+        .subcommand(
+            Command::new("list")
+                .about("List all devices on the Hue Bridge.")
+                .arg(user_name_arg.clone()) // Add shared arguments
+                .arg(api_key_arg.clone()),
+        )
         .get_matches();
 
-    let mut bridge = None;
     if let Some(bridge_ip) = matches.get_one::<String>("bridge") {
         println!("Using Hue Bridge at: {}", bridge_ip);
-        bridge = Some(BridgeIp(String::from(bridge_ip)));
-    } else {
-        println!("No Hue Bridge IP address provided.");
-    }
-
-    if let Some(_sub_matches) = matches.subcommand_matches("create-key") {
-        println!("Requesting creation of a new application key on the Hue Bridge. Make sure you have pressed the link button on the bridge!");
-        match create_key(&bridge.unwrap()) {
-            Ok(bridge_key) => {
-                println!("Key created: {:?}", bridge_key);
-                Ok(())
-            }
-            Err(e) => Err(Box::new(HueError(
-                format!("Error creating key: {:?}", e.0),
-                e.1,
-            ))),
+        let bridge = Some(BridgeIp(String::from(bridge_ip)));
+        if let Some(_sub_matches) = matches.subcommand_matches("create-key") {
+            println!("Requesting creation of a new application key on the Hue Bridge. Make sure you have pressed the link button on the bridge!");
+            let bridge_key = create_key(&bridge.unwrap())?;
+            println!("Key created: {:?}", bridge_key);
+            Ok(())
+        } else if let Some(_sub_matches) = matches.subcommand_matches("list") {
+            println!("Requesting list of devices on the Hue Bridge...");
+            // TODO: 
+            Ok(())
+        } else {
+            Err(Box::new(HueError(
+                String::from("No subcommand provided. Please provide a subcommand."),
+                None,
+            )))
         }
     } else {
         Err(Box::new(HueError(
-            String::from("No subcommand provided. Please provide a subcommand."),
+            String::from("No Hue Bridge IP address provided."),
             None,
         )))
     }
