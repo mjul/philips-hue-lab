@@ -286,7 +286,7 @@ struct LightOnOffState {
     on: bool,
 }
 
-/// A light ID
+/// A light ID, the service ID for a light device.
 struct LightId(String);
 impl From<&LightId> for String {
     fn from(light_id: &LightId) -> Self {
