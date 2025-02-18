@@ -263,7 +263,6 @@ struct HueApiDeviceService {
     rtype: String,
 }
 
-
 fn parse_list_devices_response(json_response: &Value) -> Result<Vec<HueDevice>, HueError> {
     let parsed: HueApiDeviceResponse =
         serde_json::from_value::<HueApiDeviceResponse>(json_response.clone())
@@ -277,7 +276,11 @@ fn parse_list_devices_response(json_response: &Value) -> Result<Vec<HueDevice>, 
                     id: d.id,
                     name: d.metadata.name,
                     product_name: d.product_data.product_name,
-                    light_id: d.services.iter().find(|s| s.rtype == "light").map(|s| LightId(s.rid.clone())),
+                    light_id: d
+                        .services
+                        .iter()
+                        .find(|s| s.rtype == "light")
+                        .map(|s| LightId(s.rid.clone())),
                 })
             })
             .collect()),
@@ -306,18 +309,21 @@ impl From<&LightId> for String {
     }
 }
 
-
-fn control_light(bridge_ip: &BridgeIp, api_key: &AppKey, light_id: &LightId, on: bool) -> Result<(), HueError> {
+fn control_light(
+    bridge_ip: &BridgeIp,
+    api_key: &AppKey,
+    light_id: &LightId,
+    on: bool,
+) -> Result<(), HueError> {
     let body = LightControlRequestBody {
-        on: LightOnOffState { on }
+        on: LightOnOffState { on },
     };
-    
+
     let path = format!("/clip/v2/resource/light/{}", String::from(light_id));
     put_request(&bridge_ip, &api_key, &path, &body)
         .map_err(|e| HueError(e.to_string(), Some(e)))?;
     Ok(())
 }
-
 
 /// Send a PUT request to the Hue Bridge.
 fn put_request<T>(
@@ -342,7 +348,10 @@ where
     println!("Raw response: {:?}", response);
     if !response.status().is_success() {
         return Err(Box::new(HueError(
-            format!("Failed to send PUT request to Hue Bridge: {}", &response.status()),
+            format!(
+                "Failed to send PUT request to Hue Bridge: {}",
+                &response.status()
+            ),
             None,
         )));
     }
@@ -419,13 +428,21 @@ fn main() -> Result<(), Box<dyn Error>> {
             ));
             println!("Requesting list of devices on the Hue Bridge...");
             let devices = list_devices(&bridge, &app_key)?;
-            println!("{:36} | {:30} | {:20} | {:20}", "Device ID", "Name", "Product Name", "Light ID");
-            for HueDevice(di) in devices {
-                println!("{:36} | {:30} | {:20} | {:20}", di.id, di.name, di.product_name, match di.light_id {
-                    Some(light_id) => String::from(&light_id),
-                    None => "".to_string(),
-                }   
+            println!(
+                "{:36} | {:30} | {:20} | {:20}",
+                "Device ID", "Name", "Product Name", "Light ID"
             );
+            for HueDevice(di) in devices {
+                println!(
+                    "{:36} | {:30} | {:20} | {:20}",
+                    di.id,
+                    di.name,
+                    di.product_name,
+                    match di.light_id {
+                        Some(light_id) => String::from(&light_id),
+                        None => "".to_string(),
+                    }
+                );
             }
             Ok(())
         } else if let Some(light_matches) = matches.subcommand_matches("light") {
@@ -435,17 +452,23 @@ fn main() -> Result<(), Box<dyn Error>> {
                     .unwrap(),
             ));
             let light_id = light_matches.get_one::<String>("id").unwrap();
-            
+
             let turn_on = match (light_matches.get_flag("on"), light_matches.get_flag("off")) {
                 (true, false) => true,
                 (false, true) => false,
-                _ => return Err(Box::new(HueError(
-                    String::from("Must specify either --on or --off"),
-                    None,
-                ))),
+                _ => {
+                    return Err(Box::new(HueError(
+                        String::from("Must specify either --on or --off"),
+                        None,
+                    )))
+                }
             };
-            
-            println!("Setting light {} to {}", light_id, if turn_on { "on" } else { "off" });
+
+            println!(
+                "Setting light {} to {}",
+                light_id,
+                if turn_on { "on" } else { "off" }
+            );
             let light_id = LightId(String::from(light_id));
             control_light(&bridge, &app_key, &light_id, turn_on)?;
             println!("Light state updated successfully");
