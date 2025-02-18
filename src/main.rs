@@ -460,11 +460,11 @@ mod tests {
         assert_eq!(ds.len(), 1);
         assert_eq!(
             ds[0],
-            HueDevice::Light(LightDevice(DeviceInfo {
+            HueDevice(DeviceInfo {
                 id: "94860050-1d86-4b79-8583-1be7dce05197".to_string(),
                 name: "Space light 1".to_string(),
                 product_name: "Space Light".to_string(),
-            }))
+            })
         )
     }
 }
