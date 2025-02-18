@@ -179,9 +179,18 @@ fn get_request(
         .get(&url)
         .header("Accept", "application/json")
         .header("hue-application-key", String::from(app_key))
-        .send();
+        .send()?;
     println!("Raw response: {:?}", response);
-    let result = response?.json::<serde_json::Value>()?;
+    if !response.status().is_success() {
+        return Err(Box::new(HueError(
+            format!(
+                "Failed to send GET request to Hue Bridge: {}",
+                &response.status()
+            ),
+            None,
+        )));
+    }
+    let result = response.json::<serde_json::Value>()?;
     Ok(result)
 }
 
@@ -201,9 +210,18 @@ where
         .post(&url)
         .header("Accept", "application/json")
         .body(body_str)
-        .send();
+        .send()?;
     println!("Raw response: {:?}", response);
-    let result = response?.json::<serde_json::Value>()?;
+    if !response.status().is_success() {
+        return Err(Box::new(HueError(
+            format!(
+                "Failed to send POST request to Hue Bridge: {}",
+                &response.status()
+            ),
+            None,
+        )));
+    }
+    let result = response.json::<serde_json::Value>()?;
     Ok(result)
 }
 
