@@ -273,6 +273,64 @@ fn parse_list_devices_response(json_response: &Value) -> Result<Vec<HueDevice>, 
     }
 }
 
+/// The body for the PUT /clip/v2/resource/light/{id} endpoint
+/// See documentation at <https://developers.meethue.com/develop/hue-api-v2/core-concepts/#controlling-light>
+#[derive(Serialize, Debug)]
+struct LightControlRequestBody {
+    on: LightOnOffState,
+}
+
+#[derive(Serialize, Debug)]
+struct LightOnOffState {
+    on: bool,
+}
+
+/// A light ID
+struct LightId(String);
+impl From<&LightId> for String {
+    fn from(light_id: &LightId) -> Self {
+        light_id.0.clone()
+    }
+}
+
+
+fn control_light(bridge_ip: &BridgeIp, api_key: &AppKey, light_id: &LightId, on: bool) -> Result<(), HueError> {
+    let body = LightControlRequestBody {
+        on: LightOnOffState { on }
+    };
+    
+    let path = format!("/clip/v2/resource/light/{}", String::from(light_id));
+    put_request(&bridge_ip, &api_key, &path, &body)
+        .map_err(|e| HueError(e.to_string(), Some(e)))?;
+    Ok(())
+}
+
+
+/// Send a PUT request to the Hue Bridge.
+fn put_request<T>(
+    bridge_ip: &BridgeIp,
+    app_key: &AppKey,
+    path: &str,
+    body: &T,
+) -> Result<serde_json::Value, Box<dyn Error>>
+where
+    T: ?Sized + Serialize,
+{
+    let url = format!("https://{}{}", bridge_ip.0, path);
+    println!("Requesting: {}", url);
+    let body_str = serde_json::to_string(body)?;
+    println!("Body: {:?}", body_str);
+    let response = create_reqwest_client()?
+        .put(&url)
+        .header("Accept", "application/json")
+        .header("hue-application-key", String::from(app_key))
+        .body(body_str)
+        .send();
+    println!("Raw response: {:?}", response);
+    let result = response?.json::<serde_json::Value>()?;
+    Ok(result)
+}
+
 fn main() -> Result<(), Box<dyn Error>> {
     let app_key_arg = Arg::new("key")
         .help("Application key for the Philips Hue API")
@@ -299,6 +357,31 @@ fn main() -> Result<(), Box<dyn Error>> {
                 .about("List all devices on the Hue Bridge.")
                 .arg(app_key_arg.clone()),
         )
+        .subcommand(
+            Command::new("light")
+                .about("Control a light")
+                .arg(app_key_arg.clone())
+                .arg(
+                    Arg::new("id")
+                        .help("Light ID")
+                        .required(true)
+                        .index(1)
+                )
+                .arg(
+                    Arg::new("on")
+                        .help("Turn the light on")
+                        .long("on")
+                        .action(clap::ArgAction::SetTrue)
+                        .conflicts_with("off")
+                )
+                .arg(
+                    Arg::new("off")
+                        .help("Turn the light off")
+                        .long("off")
+                        .action(clap::ArgAction::SetTrue)
+                        .conflicts_with("on")
+                )
+        )
         .get_matches();
 
     if let Some(bridge_ip) = matches.get_one::<String>("bridge") {
@@ -320,6 +403,28 @@ fn main() -> Result<(), Box<dyn Error>> {
             for HueDevice(di) in devices {
                 println!("{:36} | {:30} | {:20}", di.id, di.name, di.product_name);
             }
+            Ok(())
+        } else if let Some(light_matches) = matches.subcommand_matches("light") {
+            let app_key = AppKey(String::from(
+                light_matches
+                    .get_one::<String>(app_key_arg.get_id().as_str())
+                    .unwrap(),
+            ));
+            let light_id = light_matches.get_one::<String>("id").unwrap();
+            
+            let turn_on = match (light_matches.get_flag("on"), light_matches.get_flag("off")) {
+                (true, false) => true,
+                (false, true) => false,
+                _ => return Err(Box::new(HueError(
+                    String::from("Must specify either --on or --off"),
+                    None,
+                ))),
+            };
+            
+            println!("Setting light {} to {}", light_id, if turn_on { "on" } else { "off" });
+            let light_id = LightId(String::from(light_id));
+            control_light(&bridge, &app_key, &light_id, turn_on)?;
+            println!("Light state updated successfully");
             Ok(())
         } else {
             Err(Box::new(HueError(
