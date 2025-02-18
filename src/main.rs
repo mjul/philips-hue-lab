@@ -4,7 +4,6 @@ use serde::{Deserialize, Serialize};
 use serde_json::Value;
 use std::error::Error;
 use std::fmt::{Display, Formatter};
-use std::sync::Arc;
 
 const HUE_API_APP_NAME: &str = "philips_hue_lab";
 const HUE_API_USER_NAME: &str = "hue_lab_user";
@@ -214,6 +213,8 @@ struct DeviceInfo {
     id: String,
     name: String,
     product_name: String,
+    /// The service ID for a light device (for light devices only)
+    light_id: Option<LightId>,
 }
 
 /// A Hue device on the bridge
@@ -240,6 +241,7 @@ struct HueApiDeviceData {
     id: String,
     product_data: HueApiDeviceProductData,
     metadata: HueApiDeviceMetadata,
+    services: Vec<HueApiDeviceService>,
 }
 
 /// Hue API representation of device product data (some of the information)
@@ -254,6 +256,14 @@ struct HueApiDeviceMetadata {
     name: String,
 }
 
+/// Hue API representation of device service data (some of the information)
+#[derive(Deserialize, Debug)]
+struct HueApiDeviceService {
+    rid: String,
+    rtype: String,
+}
+
+
 fn parse_list_devices_response(json_response: &Value) -> Result<Vec<HueDevice>, HueError> {
     let parsed: HueApiDeviceResponse =
         serde_json::from_value::<HueApiDeviceResponse>(json_response.clone())
@@ -267,6 +277,7 @@ fn parse_list_devices_response(json_response: &Value) -> Result<Vec<HueDevice>, 
                     id: d.id,
                     name: d.metadata.name,
                     product_name: d.product_data.product_name,
+                    light_id: d.services.iter().find(|s| s.rtype == "light").map(|s| LightId(s.rid.clone())),
                 })
             })
             .collect()),
@@ -287,6 +298,7 @@ struct LightOnOffState {
 }
 
 /// A light ID, the service ID for a light device.
+#[derive(Debug, Clone, PartialEq)]
 struct LightId(String);
 impl From<&LightId> for String {
     fn from(light_id: &LightId) -> Self {
@@ -407,8 +419,13 @@ fn main() -> Result<(), Box<dyn Error>> {
             ));
             println!("Requesting list of devices on the Hue Bridge...");
             let devices = list_devices(&bridge, &app_key)?;
+            println!("{:36} | {:30} | {:20} | {:20}", "Device ID", "Name", "Product Name", "Light ID");
             for HueDevice(di) in devices {
-                println!("{:36} | {:30} | {:20}", di.id, di.name, di.product_name);
+                println!("{:36} | {:30} | {:20} | {:20}", di.id, di.name, di.product_name, match di.light_id {
+                    Some(light_id) => String::from(&light_id),
+                    None => "".to_string(),
+                }   
+            );
             }
             Ok(())
         } else if let Some(light_matches) = matches.subcommand_matches("light") {
@@ -573,6 +590,7 @@ mod tests {
                 id: "94860050-1d86-4b79-8583-1be7dce05197".to_string(),
                 name: "Space light 1".to_string(),
                 product_name: "Space Light".to_string(),
+                light_id: Some(LightId("53ca6e61-5e40-4760-9e2e-6d2f48594901".to_string())),
             })
         )
     }
