@@ -4,6 +4,7 @@ use serde::{Deserialize, Serialize};
 use serde_json::Value;
 use std::error::Error;
 use std::fmt::{Display, Formatter};
+use std::sync::Arc;
 
 const HUE_API_APP_NAME: &str = "philips_hue_lab";
 const HUE_API_USER_NAME: &str = "hue_lab_user";
@@ -325,9 +326,15 @@ where
         .header("Accept", "application/json")
         .header("hue-application-key", String::from(app_key))
         .body(body_str)
-        .send();
+        .send()?;
     println!("Raw response: {:?}", response);
-    let result = response?.json::<serde_json::Value>()?;
+    if !response.status().is_success() {
+        return Err(Box::new(HueError(
+            format!("Failed to send PUT request to Hue Bridge: {}", &response.status()),
+            None,
+        )));
+    }
+    let result = response.json::<serde_json::Value>()?;
     Ok(result)
 }
 
