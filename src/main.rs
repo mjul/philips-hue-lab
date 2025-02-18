@@ -159,6 +159,15 @@ fn parse_api_response_errors(response: &serde_json::Value) -> Vec<HueApiErrorMes
     }
 }
 
+fn create_reqwest_client() -> Result<blocking::Client, Box<dyn Error>> {
+    let cert = reqwest::Certificate::from_pem(HUE_ROOT_CA.as_bytes())?;
+    let client = blocking::ClientBuilder::new()
+        .add_root_certificate(cert)
+        .danger_accept_invalid_certs(true)
+        .build()?;
+    Ok(client)
+}
+
 fn get_request(
     bridge_ip: &BridgeIp,
     app_key: &AppKey,
@@ -166,13 +175,7 @@ fn get_request(
 ) -> Result<serde_json::Value, Box<dyn Error>> {
     let url = format!("https://{}{}", bridge_ip.0, path);
     println!("Requesting: {}", url);
-    let cert = reqwest::Certificate::from_pem(HUE_ROOT_CA.as_bytes())?;
-    let client = blocking::ClientBuilder::new()
-        .add_root_certificate(cert)
-        // otherwise we get an error  "The certificate's CN name does not match the passed value."
-        .danger_accept_invalid_certs(true)
-        .build()?;
-    let response = client
+    let response = create_reqwest_client()?
         .get(&url)
         .header("Accept", "application/json")
         .header("hue-application-key", String::from(app_key))
@@ -192,15 +195,9 @@ where
 {
     let url = format!("https://{}{}", bridge_ip.0, path);
     println!("Requesting: {}", url);
-    let cert = reqwest::Certificate::from_pem(HUE_ROOT_CA.as_bytes())?;
-    let client = blocking::ClientBuilder::new()
-        .add_root_certificate(cert)
-        // otherwise we get an error  "The certificate's CN name does not match the passed value."
-        .danger_accept_invalid_certs(true)
-        .build()?;
     let body_str = serde_json::to_string(body)?;
     println!("Body: {:?}", body_str);
-    let response = client
+    let response = create_reqwest_client()?
         .post(&url)
         .header("Accept", "application/json")
         .body(body_str)
