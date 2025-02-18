@@ -363,7 +363,7 @@ fn main() -> Result<(), Box<dyn Error>> {
                 .arg(app_key_arg.clone())
                 .arg(
                     Arg::new("id")
-                        .help("Light ID")
+                        .help("The light device service ID.")
                         .required(true)
                         .index(1)
                 )
