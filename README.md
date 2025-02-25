@@ -42,6 +42,19 @@ running this command to authorize the key generation:
 
 Once the key is created you can use it with the other commands to control the devices.
 
+You can define some handy environment variables to make it easier:
+
+```powershell
+$env:HUE_BRIDGE_IP = "192.168.1.2"
+$env:HUE_API_KEY = "your-api-key"
+```
+
+Then you can run the application with:
+
+```powershell
+.\target\debug\philips_hue_lab.exe --bridge $env:HUE_BRIDGE_IP list --key $env:HUE_API_KEY
+```
+
 ## License
 MI License, see the [LICENSE](LICENSE) file.
 
