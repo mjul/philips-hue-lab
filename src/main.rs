@@ -311,11 +311,18 @@ fn parse_list_devices_response(json_response: &Value) -> Result<Vec<HueDevice>, 
 #[derive(Serialize, Debug)]
 struct LightControlRequestBody {
     on: LightOnOffState,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    dimming: Option<LightDimmingState>,
 }
 
 #[derive(Serialize, Debug)]
 struct LightOnOffState {
     on: bool,
+}
+
+#[derive(Serialize, Debug)]
+struct LightDimmingState {
+    brightness: f32,
 }
 
 /// A light ID, the service ID for a light device.
@@ -332,9 +339,17 @@ fn control_light(
     api_key: &AppKey,
     light_id: &LightId,
     on: bool,
+    dimming_level: Option<u8>,
 ) -> Result<(), HueError> {
+    let dimming = dimming_level.map(|level| {
+        // Convert 0-100 scale to 0.0-100.0 brightness
+        let brightness = f32::from(level.clamp(0, 100));
+        LightDimmingState { brightness }
+    });
+
     let body = LightControlRequestBody {
         on: LightOnOffState { on },
+        dimming,
     };
 
     let path = format!("/clip/v2/resource/light/{}", String::from(light_id));
@@ -377,6 +392,65 @@ where
     Ok(result)
 }
 
+/// Find a light by ID or name.
+/// First tries to match the input as a light ID.
+/// If no match is found, queries the bridge for all devices and searches for a name match.
+/// Returns the light ID if a single match is found.
+fn find_light_by_id_or_name(
+    bridge_ip: &BridgeIp,
+    api_key: &AppKey,
+    id_or_name: &str,
+) -> Result<LightId, HueError> {
+    // First, try to list all devices
+    let devices = list_devices(bridge_ip, api_key)?;
+    
+    // Check if the input matches a light ID directly
+    for HueDevice(device_info) in &devices {
+        if let Some(light_id) = &device_info.light_id {
+            if light_id.0 == id_or_name {
+                return Ok(light_id.clone());
+            }
+        }
+    }
+    
+    // If no direct ID match, search for name matches (case-insensitive substring)
+    let name_query = id_or_name.to_lowercase();
+    let mut matches = Vec::new();
+    
+    // Collect devices with matching names
+    for HueDevice(device_info) in devices {
+        if let Some(light_id) = device_info.light_id.clone() {
+            if device_info.name.to_lowercase().contains(&name_query) {
+                println!("Found matching light: {} ({})", device_info.name, light_id.0);
+                matches.push((device_info, light_id));
+            }
+        }
+    }
+    
+    match matches.len() {
+        0 => Err(HueError(format!("No light found with ID or name matching '{}'", id_or_name), None)),
+        1 => {
+            let (device_info, light_id) = matches.remove(0);
+            println!("Using light: {} ({})", device_info.name, light_id.0);
+            Ok(light_id)
+        },
+        _ => {
+            let match_info: Vec<String> = matches
+                .iter()
+                .map(|(info, _)| format!("{} ({})", info.name, info.id))
+                .collect();
+            Err(HueError(
+                format!(
+                    "Multiple lights found matching '{}'. Please be more specific or use the light ID directly: {}",
+                    id_or_name,
+                    match_info.join(", ")
+                ),
+                None,
+            ))
+        }
+    }
+}
+
 fn main() -> Result<(), Box<dyn Error>> {
     let app_key_arg = Arg::new("key")
         .help("Application key for the Philips Hue API")
@@ -409,7 +483,7 @@ fn main() -> Result<(), Box<dyn Error>> {
                 .arg(app_key_arg.clone())
                 .arg(
                     Arg::new("id")
-                        .help("The light device service ID.")
+                        .help("The light device service ID or a part of the light name (case-insensitive substring search).")
                         .required(true)
                         .index(1)
                 )
@@ -426,6 +500,13 @@ fn main() -> Result<(), Box<dyn Error>> {
                         .long("off")
                         .action(clap::ArgAction::SetTrue)
                         .conflicts_with("on")
+                )
+                .arg(
+                    Arg::new("dim")
+                        .help("Set the dimming level (0-100)")
+                        .long("dim")
+                        .value_name("LEVEL")
+                        .value_parser(clap::value_parser!(u8).range(0..=100))
                 )
         )
         .get_matches();
@@ -469,7 +550,7 @@ fn main() -> Result<(), Box<dyn Error>> {
                     .get_one::<String>(app_key_arg.get_id().as_str())
                     .unwrap(),
             ));
-            let light_id = light_matches.get_one::<String>("id").unwrap();
+            let id_or_name = light_matches.get_one::<String>("id").unwrap();
 
             let turn_on = match (light_matches.get_flag("on"), light_matches.get_flag("off")) {
                 (true, false) => true,
@@ -482,13 +563,30 @@ fn main() -> Result<(), Box<dyn Error>> {
                 }
             };
 
+            // Get the dimming level if provided
+            let dimming_level = light_matches.get_one::<u8>("dim").copied();
+
+            println!(
+                "Finding light with ID or name: {}",
+                id_or_name
+            );
+            
+            let light_id = find_light_by_id_or_name(&bridge, &app_key, id_or_name)?;
+            
+            // Update the message to include dimming information
+            let state_message = match (turn_on, dimming_level) {
+                (false, _) => "off".to_string(),
+                (true, None) => "on".to_string(),
+                (true, Some(level)) => format!("on with brightness {}%", level),
+            };
+            
             println!(
                 "Setting light {} to {}",
-                light_id,
-                if turn_on { "on" } else { "off" }
+                light_id.0,
+                state_message
             );
-            let light_id = LightId(String::from(light_id));
-            control_light(&bridge, &app_key, &light_id, turn_on)?;
+            
+            control_light(&bridge, &app_key, &light_id, turn_on, dimming_level)?;
             println!("Light state updated successfully");
             Ok(())
         } else {

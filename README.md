@@ -55,6 +55,23 @@ Then you can run the application with:
 .\target\debug\philips_hue_lab.exe --bridge $env:HUE_BRIDGE_IP list --key $env:HUE_API_KEY
 ```
 
+### Controlling Lights
+
+You can control lights using the `light` subcommand:
+
+```powershell
+# Turn a light on
+.\target\debug\philips_hue_lab.exe --bridge $env:HUE_BRIDGE_IP light --key $env:HUE_API_KEY "Kitchen" --on
+
+# Turn a light off
+.\target\debug\philips_hue_lab.exe --bridge $env:HUE_BRIDGE_IP light --key $env:HUE_API_KEY "Kitchen" --off
+
+# Turn a light on and set brightness to 50%
+.\target\debug\philips_hue_lab.exe --bridge $env:HUE_BRIDGE_IP light --key $env:HUE_API_KEY "Kitchen" --on --dim 50
+```
+
+You can specify lights by their name (partial match) or by their light ID.
+
 ## License
 MI License, see the [LICENSE](LICENSE) file.
 
